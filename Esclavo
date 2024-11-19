@@ -1,0 +1,156 @@
+//Universidad del Valle de Guatemala
+//Electrónica Digital 2
+//Javier Pineda (22682) Julio Pérez (221023)
+//Proyecto - 3 Implementación de UART, TFT, I2C y SPI.
+//Librerías incluidas en el código.
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_NeoPixel.h>
+#ifdef __AVR__
+#include <avr/power.h>
+#endif
+
+// Definiciones de configuración
+#define PIN_NEO_PIXEL 4  // Pin de conexión para la tira de NeoPixel
+#define NUM_PIXELS 20    // Número de píxeles en la tira de NeoPixel
+#define DELAY_INTERVAL 250  // Intervalo de retardo entre cada píxel
+
+// Estados de la tira de NeoPixel
+#define OFF 0       // Estado: Apagado
+#define ON 1        // Estado: Encendido
+#define MEASURING 2 // Estado: Midiendo presión
+#define SAVING 3    // Estado: Guardando datos
+#define ERROR 4     // Estado: Error
+
+int state = OFF;  // Inicializa el estado en "OFF"
+
+int presion = 0;  // Variable para almacenar el valor de presión
+
+// Instancia de la tira de NeoPixel
+Adafruit_NeoPixel NeoPixel(NUM_PIXELS, PIN_NEO_PIXEL, NEO_GRB + NEO_KHZ800);
+
+// Instancia del sensor BMP280
+Adafruit_BMP280 bmp; 
+
+// Definición de pines I2C (para ESP32)
+#define I2C_SDA 21
+#define I2C_SCL 22
+
+// Función para actualizar el color de la tira de NeoPixel según el estado
+void showNeoPixel(int state);
+
+void setup() {
+  // Inicialización de la comunicación serie
+  Serial.begin(115200);
+  Serial2.begin(115200);  // Comunicación UART con el STM32
+    
+  NeoPixel.begin();  // Inicializa la tira de NeoPixel
+
+  // Configura los pines I2C en el ESP32
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  // Inicializa el sensor BMP280
+  if (!bmp.begin(0x76)) { // Dirección I2C por defecto: 0x76
+    Serial.println("¡No se encontró el sensor BMP280!");  // Error si no se encuentra el sensor
+    while (1);  // Detener el programa si el sensor no se encuentra
+  }
+
+  // Configuración del sensor BMP280 (modo, muestreo y filtro)
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,       // Modo normal
+                  Adafruit_BMP280::SAMPLING_X2,       // Muestreo de temperatura
+                  Adafruit_BMP280::SAMPLING_X16,      // Muestreo de presión
+                  Adafruit_BMP280::FILTER_X16,        // Filtro
+                  Adafruit_BMP280::STANDBY_MS_500);   // Tiempo de espera
+}
+
+void loop() {
+  state = ON;  // Cambiar estado a "ON" (encendido)
+  showNeoPixel(state);  // Mostrar el estado "Encendido" en la tira de NeoPixel
+
+  if (Serial2.available() > 0) {  // Si hay datos disponibles en el puerto UART
+    uint8_t request = Serial2.read();  // Leer la solicitud desde STM32
+
+    // Imprimir la solicitud recibida para depuración
+    Serial.print("Request recibido: ");
+    Serial.println(request);
+    
+    // Cambiar el estado a "ON" (encendido) después de recibir la solicitud
+    state = ON;  
+    showNeoPixel(state);  // Mostrar el estado "Encendido" en la tira de NeoPixel
+    
+    // Según el valor de la solicitud (request)
+    if (request == 1) {  // Si la solicitud es 1, medir la presión
+      state = MEASURING;  // Cambiar el estado a "Midiendo"
+      showNeoPixel(state);  // Mostrar el estado "Midiendo"
+      presion = bmp.readPressure()/100;  // Leer la presión (convertir de Pa a hPa)
+
+    } else if (request == 2) {  // Si la solicitud es 2, guardar datos
+      state = SAVING;  // Cambiar el estado a "Guardando"
+      showNeoPixel(state);  // Mostrar el estado "Guardando datos"
+      delay(1000);  // Simular el tiempo de guardado de datos (1 segundo)
+      
+    } else {
+      // En caso de recibir una solicitud desconocida (opcional)
+      /*
+      state = ERROR;  // Cambiar el estado a "Error"
+      showNeoPixel(state);  // Mostrar el estado "Error"
+      Serial.print("Estado de error. Request desconocido: ");
+      Serial.println(request);
+      */
+    }
+
+    // Imprimir el valor de presión en la consola serie
+    Serial.print("Presión: ");
+    Serial.print(presion);
+    Serial.println(" hPa");
+
+    // Mapear el valor de presión (de 0 a 1100 hPa a 0-255) para enviar como respuesta
+    int presionmap = map(presion, 0, 1100, 0, 255);
+    Serial2.write(presionmap);  // Enviar la respuesta (valor mapeado) al STM32
+
+    // Imprimir la respuesta enviada para depuración
+    Serial.print("Response enviado: ");
+    Serial.println(presion);
+    Serial.println(presionmap);
+  }
+}
+
+// Función para mostrar el color de la tira de NeoPixel según el estado
+void showNeoPixel(int state) {
+    NeoPixel.clear();  // Apagar todos los LEDs antes de actualizar el estado
+
+    uint32_t color;
+    switch (state) {
+        case OFF:
+            color = NeoPixel.Color(0, 0, 0);  // Apagar LEDs (sin color)
+            break;
+        case ON:
+            color = NeoPixel.Color(0, 255, 0);  // Verde para el estado "Encendido"
+            break;
+        case MEASURING:
+            color = NeoPixel.Color(0, 0, 255);  // Azul para el estado "Midiendo"
+            break;
+        case SAVING:
+            color = NeoPixel.Color(0, 255, 255);  // Celeste para el estado "Guardando"
+            break;
+        case ERROR:
+            color = NeoPixel.Color(255, 0, 0);  // Rojo para el estado "Error"
+            break;
+        default:
+            color = NeoPixel.Color(0, 0, 0);  // Apagar LEDs si el estado no es reconocido
+            break;
+    }
+
+    // Aplica el color seleccionado a todos los píxeles
+    for (int pixel = 0; pixel < NUM_PIXELS; pixel++) {
+        NeoPixel.clear();  // Limpiar antes de actualizar cada LED
+
+        NeoPixel.setPixelColor(pixel, color);  // Configurar el color del LED actual
+        NeoPixel.show();  // Actualizar la tira de LEDs
+
+        delay(40);  // Esperar un momento para que el efecto sea visible
+    }
+}
